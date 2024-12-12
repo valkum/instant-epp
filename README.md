@@ -18,6 +18,7 @@ for domain registrars. We have implemented support for the following standards:
 - [RFC 5733](https://tools.ietf.org/html/rfc5733) - Extensible Provisioning Protocol (EPP) Contact Mapping
 - [RFC 5734](https://tools.ietf.org/html/rfc5734) - Extensible Provisioning Protocol (EPP) Transport over TCP
 - [RFC 3915](https://tools.ietf.org/html/rfc3915) - Domain Registry Grace Period Mapping
+- [RFC 8590](https://tools.ietf.org/html/rfc8590) - Change Poll Extension for the Extensible Provisioning Protocol (EPP)
 - [ConsoliDate mapping](https://www.verisign.com/assets/consolidate-mapping.txt)
 - [Namestore Extension Mapping](https://www.verisign.com/assets/epp-sdk/verisign_epp-extension_namestoreext_v01.html)
 - [Low Balance Mapping](https://www.verisign.com/assets/epp-sdk/verisign_epp-extension_low-balance_v01.html)
