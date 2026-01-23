@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use instant_xml::FromXmlOwned;
 #[cfg(feature = "__rustls")]
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::{debug, error};
@@ -116,6 +117,37 @@ impl<C: Connector> EppClient<C> {
         xml::deserialize::<Greeting>(&response)
     }
 
+    /// Execute an EPP command with optional extensions
+    ///
+    /// The extension response is automatically determined from the request extension type.
+    ///
+    /// Example usage:
+    /// ```rust,ignore
+    /// use instant_epp::EppClient;
+    /// use instant_epp::domain::DomainCheck;
+    /// use instant_epp::extensions::namestore::NameStore;
+    ///
+    /// # #[cfg(feature = "rustls")]
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// // Create an instance of EppClient
+    /// let timeout = Duration::from_secs(5);
+    /// let mut client = match EppClient::connect("registry_name".to_string(), ("example.com".to_owned(), 7000), None, timeout).await {
+    ///     Ok(client) => client,
+    ///     Err(e) => panic!("Failed to create EppClient: {}",  e)
+    /// };
+    ///
+    /// // Execute an EPP Command against the registry with distinct request and response objects
+    /// // This uses the NameStore extension both in the request
+    /// let domain_check = DomainCheck { domains: &["eppdev.com", "eppdev.net"] };
+    /// let namestore_ext = NameStore::new("dotCOM");
+    /// let response = client.transact((&domain_check, &namestore_ext), "transaction-id").await.unwrap();
+    /// let subproduct = response.extension().unwrap().subproduct;
+    /// # }
+    /// #
+    /// # #[cfg(not(feature = "rustls"))]
+    /// # fn main() {}
+    /// ```
     pub async fn transact<'c, 'e, Cmd, Ext>(
         &mut self,
         data: impl Into<RequestData<'c, 'e, Cmd, Ext>>,
@@ -134,6 +166,75 @@ impl<C: Connector> EppClient<C> {
         debug!("{}: response: {}", self.connection.registry, &response);
 
         let rsp = match xml::deserialize::<Response<Cmd::Response, Ext::Response>>(&response) {
+            Ok(rsp) => rsp,
+            Err(e) => {
+                error!(%response, "failed to deserialize response for transaction: {e}");
+                return Err(e);
+            }
+        };
+
+        if rsp.result.code.is_success() {
+            return Ok(rsp);
+        }
+
+        let err = crate::error::Error::Command(Box::new(ResponseStatus {
+            result: rsp.result,
+            tr_ids: rsp.tr_ids,
+        }));
+
+        Err(err)
+    }
+
+    /// Like `transact` but allows you to specify the response extensions
+    ///
+    /// This is useful for connections where you get extensions in the response
+    /// but don't need to send any extensions in the request.
+    /// For example secDNS during <info>.
+    ///
+    /// /// Example usage:
+    /// ```rust,ignore
+    /// use instant_epp::EppClient;
+    /// use instant_epp::domain::DomainCheck;
+    /// use instant_epp::extensions::rgp::request::RgpRequestInfoResponse;
+    ///
+    /// # #[cfg(feature = "rustls")]
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// // Create an instance of EppClient
+    /// let timeout = Duration::from_secs(5);
+    /// let mut client = match EppClient::connect("registry_name".to_string(), ("example.com".to_owned(), 7000), None, timeout).await {
+    ///     Ok(client) => client,
+    ///     Err(e) => panic!("Failed to create EppClient: {}",  e)
+    /// };
+    ///
+    /// // Execute an EPP Command against the registry with distinct request and response objects
+    /// // This uses the NameStore extension both in the request
+    /// let domain_check = DomainCheck { domains: &["eppdev.com", "eppdev.net"] };
+    /// let response = client.transact_without_ext::<_, RgpRequestInfoResponse>((&domain_check, &namestore_ext), "transaction-id").await.unwrap();
+    /// println!("RGP Status: {:?}", response.extension().unwrap().rgp_status.join(", "));
+    /// # }
+    /// #
+    /// # #[cfg(not(feature = "rustls"))]
+    /// # fn main() {}
+    /// ```
+    pub async fn transact_without_ext<'c, 'e, Cmd, ExtResp>(
+        &mut self,
+        data: impl Into<RequestData<'c, 'e, Cmd, NoExtension>>,
+        id: &str,
+    ) -> Result<Response<Cmd::Response, ExtResp>, Error>
+    where
+        Cmd: Transaction<NoExtension> + Command + 'c,
+        ExtResp: FromXmlOwned,
+    {
+        let data = data.into();
+        let document = CommandWrapper::new(data.command, data.extension, id);
+        let xml = xml::serialize(&document)?;
+
+        debug!("{}: request: {}", self.connection.registry, &xml);
+        let response = self.connection.transact(&xml)?.await?;
+        debug!("{}: response: {}", self.connection.registry, &response);
+
+        let rsp = match xml::deserialize::<Response<Cmd::Response, ExtResp>>(&response) {
             Ok(rsp) => rsp,
             Err(e) => {
                 error!(%response, "failed to deserialize response for transaction: {e}");
