@@ -17,6 +17,10 @@ use crate::error::Error;
 /// EPP Connection struct with some metadata for the connection
 pub(crate) struct EppConnection<C: Connector> {
     pub(crate) registry: String,
+    /// A monotonically increasing ID for this connection, used for logging and debugging purposes.
+    /// This is incremented every time we reconnect, so that we can distinguish between different
+    /// connections to the same registry.
+    pub(crate) connection_id: u64,
     connector: C,
     stream: C::Connection,
     pub(crate) greeting: String,
@@ -41,6 +45,7 @@ impl<C: Connector> EppConnection<C> {
     ) -> Result<Self, Error> {
         let mut this = Self {
             registry,
+            connection_id: 0,
             stream: connector.connect(timeout).await?,
             connector,
             greeting: String::new(),
@@ -68,6 +73,7 @@ impl<C: Connector> EppConnection<C> {
         debug!("{}: reconnecting", self.registry);
         let _ = self.current.take();
         let _ = self.next.take();
+        self.connection_id = self.connection_id.wrapping_add(1);
         self.stream = self.connector.connect(self.timeout).await?;
         self.read_greeting().await?;
         Ok(())
@@ -82,8 +88,8 @@ impl<C: Connector> EppConnection<C> {
         match self.current.is_some() {
             true => {
                 debug!(
-                    "{}: Queueing up request in order to finish in-flight request",
-                    self.registry
+                    conn_id = self.connection_id,
+                    "{}: Queueing up request in order to finish in-flight request", self.registry
                 );
                 self.next = Some(new);
             }
@@ -95,7 +101,10 @@ impl<C: Connector> EppConnection<C> {
 
     /// Closes the socket and shuts down the connection
     pub(crate) async fn shutdown(&mut self) -> Result<(), Error> {
-        info!("{}: Closing connection", self.registry);
+        info!(
+            conn_id = self.connection_id,
+            "{}: Closing connection", self.registry
+        );
         timeout(self.timeout, self.stream.shutdown()).await?;
         Ok(())
     }
@@ -123,6 +132,7 @@ impl<C: Connector> EppConnection<C> {
 
                 start += wrote;
                 debug!(
+                    conn_id = self.connection_id,
                     "{}: Wrote {} bytes, {} out of {} done",
                     self.registry,
                     wrote,
@@ -168,7 +178,10 @@ impl<C: Connector> EppConnection<C> {
                 }
 
                 let expected = u32::from_be_bytes(filled[..4].try_into()?) as usize;
-                debug!("{}: Expected response length: {}", self.registry, expected);
+                debug!(
+                    conn_id = self.connection_id,
+                    "{}: Expected response length: {}", self.registry, expected
+                );
                 buf.resize(expected, 0);
                 Ok(Transition::Next(RequestState::Reading {
                     read,
@@ -199,6 +212,7 @@ impl<C: Connector> EppConnection<C> {
 
                 read += filled.len();
                 debug!(
+                    conn_id = self.connection_id,
                     "{}: Read {} bytes, {} out of {} done",
                     self.registry,
                     filled.len(),
@@ -207,7 +221,11 @@ impl<C: Connector> EppConnection<C> {
                 );
                 // str::from_utf8 will only be executed when the trace callsite is enabled.
                 // E.g. a tracing-subscriber listens for trace-level events.
-                trace!("Read: {}", str::from_utf8(filled).unwrap_or(""));
+                trace!(
+                    conn_id = self.connection_id,
+                    "Read: {}",
+                    str::from_utf8(filled).unwrap_or("")
+                );
 
                 //
 
