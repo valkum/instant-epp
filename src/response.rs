@@ -7,17 +7,119 @@ use instant_xml::{FromXml, Kind};
 
 use crate::common::EPP_XMLNS;
 
-/// Type corresponding to the `<undef>` tag an EPP response XML
-#[derive(Debug, Eq, FromXml, PartialEq)]
-#[xml(rename = "undef", ns(EPP_XMLNS))]
-pub struct Undef;
+/// A dynamically captured XML element from an EPP `<value>` tag.
+///
+/// Per RFC 5730, `errValueType` is `mixed="true"` with `<any namespace="##any"
+/// processContents="skip"/>` and `<anyAttribute>`, meaning it can contain
+/// arbitrary nested XML. This type captures the element tree dynamically.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValueElement {
+    /// XML namespace URI
+    pub ns: String,
+    /// Local element name
+    pub name: String,
+    /// Attributes as (name, value) pairs
+    ///
+    /// This is not fully compliant with the XML spec, as attributes might be from a
+    /// different namespace. However, in practice EPP responses typically do not
+    /// have namespaced attributes, so this is a reasonable simplification.
+    pub attributes: Vec<(String, String)>,
+    /// Text content, if any
+    pub text: Option<String>,
+    /// Nested child elements
+    pub children: Vec<ValueElement>,
+}
 
-/// Type corresponding to the `<value>` tag under `<extValue>` in an EPP response XML
-#[derive(Debug, Eq, FromXml, PartialEq)]
-#[xml(rename = "value", ns(EPP_XMLNS))]
+impl ValueElement {
+    fn deserialize_element(
+        deserializer: &mut instant_xml::Deserializer<'_, '_>,
+    ) -> Result<Self, instant_xml::Error> {
+        use instant_xml::de::Node;
+
+        let id = deserializer.parent();
+        let mut elem = ValueElement {
+            ns: id.ns.to_string(),
+            name: id.name.to_string(),
+            attributes: Vec::new(),
+            text: None,
+            children: Vec::new(),
+        };
+
+        loop {
+            match deserializer.next() {
+                Some(Ok(Node::Attribute(attr))) => {
+                    elem.attributes
+                        .push((attr.local.to_string(), attr.value.to_string()));
+                }
+                Some(Ok(Node::Open(element))) => {
+                    let mut nested = deserializer.nested(element);
+                    elem.children.push(Self::deserialize_element(&mut nested)?);
+                }
+                Some(Ok(Node::Text(text))) => {
+                    elem.text = Some(text.to_string());
+                }
+                Some(Ok(Node::Close { .. })) => break,
+                Some(Ok(_)) => continue,
+                Some(Err(e)) => return Err(e),
+                None => break,
+            }
+        }
+
+        Ok(elem)
+    }
+}
+
+/// Type corresponding to the `<value>` tag (errValueType) in an EPP response XML.
+///
+/// This ignores the anyAttribute of the spec for now.
+///
+/// Contains arbitrary XML content as defined by RFC 5730's `errValueType`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResultValue {
-    /// The `<undef>` element
-    pub undef: Undef,
+    /// The captured inner elements
+    pub elements: Vec<ValueElement>,
+}
+
+impl<'xml> FromXml<'xml> for ResultValue {
+    fn matches(id: instant_xml::Id<'_>, field: Option<instant_xml::Id<'_>>) -> bool {
+        match field {
+            Some(field) => id == field,
+            None => {
+                id == instant_xml::Id {
+                    ns: EPP_XMLNS,
+                    name: "value",
+                }
+            }
+        }
+    }
+
+    fn deserialize<'cx>(
+        into: &mut Self::Accumulator,
+        _field: &'static str,
+        deserializer: &mut instant_xml::Deserializer<'cx, 'xml>,
+    ) -> Result<(), instant_xml::Error> {
+        use instant_xml::de::Node;
+
+        let mut elements = Vec::new();
+        loop {
+            match deserializer.next() {
+                Some(Ok(Node::Open(element))) => {
+                    let mut nested = deserializer.nested(element);
+                    elements.push(ValueElement::deserialize_element(&mut nested)?);
+                }
+                Some(Ok(Node::Close { .. })) => break,
+                Some(Ok(_)) => continue,
+                Some(Err(e)) => return Err(e),
+                None => break,
+            }
+        }
+
+        *into = Some(ResultValue { elements });
+        Ok(())
+    }
+
+    type Accumulator = Option<Self>;
+    const KIND: Kind = Kind::Element;
 }
 
 /// Type corresponding to the `<extValue>` tag in an EPP response XML
@@ -31,6 +133,9 @@ pub struct ExtValue {
 }
 
 /// Type corresponding to the `<result>` tag in an EPP response XML
+///
+/// Per RFC 5730, a result can contain zero or more `<value>` and `<extValue>`
+/// elements in any order.
 #[derive(Debug, Eq, FromXml, PartialEq)]
 #[xml(rename = "result", ns(EPP_XMLNS))]
 pub struct EppResult {
@@ -40,8 +145,12 @@ pub struct EppResult {
     /// The result message
     #[xml(rename = "msg")]
     pub message: String,
-    /// Data under the `<extValue>` tag
-    pub ext_value: Option<ExtValue>,
+    /// Data under `<value>` tags
+    #[xml(rename = "value")]
+    pub values: Vec<ResultValue>,
+    /// Data under `<extValue>` tags
+    #[xml(rename = "extValue")]
+    pub ext_values: Vec<ExtValue>,
 }
 
 /// Response codes as enumerated in section 3 of RFC 5730
@@ -320,9 +429,30 @@ mod tests {
 
         assert_eq!(object.result.code, ResultCode::ObjectDoesNotExist);
         assert_eq!(object.result.message, "Object does not exist");
+        assert_eq!(object.result.ext_values.len(), 1);
+        assert_eq!(object.result.ext_values[0].reason, "545 Object not found");
+        assert_eq!(object.tr_ids.client_tr_id.unwrap(), CLTRID);
+        assert_eq!(object.tr_ids.server_tr_id, SVTRID);
+    }
+
+    #[test]
+    fn error_ext() {
+        let xml = get_xml("response/error_ext.xml").unwrap();
+        let object = xml::deserialize::<ResponseStatus>(xml.as_str()).unwrap();
+
+        assert_eq!(object.result.code, ResultCode::ParameterValuePolicyError);
+        assert_eq!(object.result.message, "Parameter value policy error");
+        assert_eq!(object.result.ext_values.len(), 1);
         assert_eq!(
-            object.result.ext_value.unwrap().reason,
-            "545 Object not found"
+            object.result.ext_values[0].reason,
+            "Maximum of 20 domains exceeded."
+        );
+
+        assert_eq!(object.result.ext_values[0].value.elements.len(), 1);
+        assert_eq!(object.result.ext_values[0].value.elements[0].name, "name");
+        assert_eq!(
+            object.result.ext_values[0].value.elements[0].ns,
+            "urn:ietf:params:xml:ns:domain-1.0"
         );
         assert_eq!(object.tr_ids.client_tr_id.unwrap(), CLTRID);
         assert_eq!(object.tr_ids.server_tr_id, SVTRID);
