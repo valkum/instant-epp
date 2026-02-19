@@ -17,6 +17,10 @@ use crate::error::Error;
 /// EPP Connection struct with some metadata for the connection
 pub(crate) struct EppConnection<C: Connector> {
     pub(crate) registry: String,
+    /// A monotonically increasing ID for this connection, used for logging and debugging purposes.
+    /// This is incremented every time we reconnect, so that we can distinguish between different
+    /// connections to the same registry.
+    pub(crate) connection_id: u64,
     connector: C,
     stream: C::Connection,
     pub(crate) greeting: String,
@@ -42,6 +46,7 @@ impl<C: Connector> EppConnection<C> {
     ) -> Result<Self, Error> {
         let mut this = Self {
             registry,
+            connection_id: 0,
             stream: connector.connect(timeout).await?,
             connector,
             greeting: String::new(),
@@ -71,6 +76,7 @@ impl<C: Connector> EppConnection<C> {
         self.stream = self.connector.connect(self.timeout).await?;
         let _ = self.current.take();
         let _ = self.next.take();
+        self.connection_id = self.connection_id.wrapping_add(1);
         self.read_greeting().await?;
         Ok(())
     }
@@ -84,8 +90,8 @@ impl<C: Connector> EppConnection<C> {
         match self.current.is_some() {
             true => {
                 debug!(
-                    "{}: Queueing up request in order to finish in-flight request",
-                    self.registry
+                    conn_id = self.connection_id,
+                    "{}: Queueing up request in order to finish in-flight request", self.registry
                 );
                 self.next = Some(new);
             }
@@ -97,7 +103,10 @@ impl<C: Connector> EppConnection<C> {
 
     /// Closes the socket and shuts down the connection
     pub(crate) async fn shutdown(&mut self) -> Result<(), Error> {
-        info!("{}: Closing connection", self.registry);
+        info!(
+            conn_id = self.connection_id,
+            "{}: Closing connection", self.registry
+        );
         timeout(self.timeout, self.stream.shutdown()).await?;
         Ok(())
     }
@@ -125,6 +134,7 @@ impl<C: Connector> EppConnection<C> {
 
                 let start = *start + wrote;
                 debug!(
+                    conn_id = self.connection_id,
                     "{}: Wrote {} bytes, {} out of {} done",
                     self.registry,
                     wrote,
@@ -195,7 +205,10 @@ impl<C: Connector> EppConnection<C> {
                     .into());
                 }
 
-                debug!("{}: Expected response length: {}", self.registry, expected);
+                debug!(
+                    conn_id = self.connection_id,
+                    "{}: Expected response length: {}", self.registry, expected
+                );
                 Ok(if new_read < expected {
                     // The first read holds only part of the frame, so read the rest in the
                     // `Reading` state.
@@ -238,6 +251,7 @@ impl<C: Connector> EppConnection<C> {
 
                 let new_read = *read + filled.len();
                 debug!(
+                    conn_id = self.connection_id,
                     "{}: Read {} bytes, {} out of {} done",
                     self.registry,
                     filled.len(),
