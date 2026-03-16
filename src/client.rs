@@ -325,6 +325,7 @@ mod rustls_connector {
     use async_trait::async_trait;
     use rustls_platform_verifier::BuilderVerifierExt;
     use tokio::net::lookup_host;
+    use tokio::net::TcpSocket;
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
     use tokio_rustls::rustls::pki_types::InvalidDnsNameError;
@@ -361,19 +362,26 @@ mod rustls_connector {
 
         async fn connect(&self, timeout: Duration) -> Result<Self::Connection, Error> {
             info!("connecting to server: {}:{}", self.server.0, self.server.1);
-            let addr = match lookup_host(&self.server).await?.next() {
-                Some(addr) => addr,
-                None => {
-                    return Err(Error::Io(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("invalid host: {}", &self.server.0),
-                    )))
-                }
-            };
+            connection::timeout(timeout, async {
+                let addr = match lookup_host(&self.server).await?.next() {
+                    Some(addr) => addr,
+                    None => {
+                        return Err(Error::Io(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid host: {}", &self.server.0),
+                        )))
+                    }
+                };
 
-            let stream = TcpStream::connect(addr).await?;
-            let future = self.inner.connect(self.server_name.clone(), stream);
-            connection::timeout(timeout, future).await
+                let socket = match addr {
+                    std::net::SocketAddr::V4(_) => TcpSocket::new_v4()?,
+                    std::net::SocketAddr::V6(_) => TcpSocket::new_v6()?,
+                };
+                socket.set_keepalive(true)?;
+                let stream = socket.connect(addr).await?;
+                Ok(self.inner.connect(self.server_name.clone(), stream).await?)
+            })
+            .await
         }
     }
 
