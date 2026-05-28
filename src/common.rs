@@ -32,26 +32,6 @@ impl Extension for NoExtension {
     type Response = Self;
 }
 
-/// The `<option>` type in EPP XML login requests
-#[derive(Debug, Eq, FromXml, PartialEq, ToXml)]
-#[xml(rename = "options", ns(EPP_XMLNS))]
-pub struct Options<'a> {
-    /// The EPP version being used
-    pub version: Cow<'a, str>,
-    /// The language that will be used during EPP transactions
-    pub lang: Cow<'a, str>,
-}
-
-impl<'a> Options<'a> {
-    /// Creates an Options object with version and lang data
-    pub fn build(version: &'a str, lang: &'a str) -> Self {
-        Self {
-            version: version.into(),
-            lang: lang.into(),
-        }
-    }
-}
-
 /// The `<svcExtension>` type in EPP XML
 #[derive(Debug, Eq, FromXml, PartialEq, ToXml)]
 #[xml(rename = "svcExtension", ns(EPP_XMLNS))]
@@ -59,16 +39,4 @@ pub struct ServiceExtension<'a> {
     /// The service extension URIs being represented by `<extURI>` in EPP XML
     #[xml(rename = "extURI")]
     pub ext_uris: Vec<Cow<'a, str>>,
-}
-
-/// The `<svcs>` type in EPP XML
-#[derive(Debug, Eq, FromXml, PartialEq, ToXml)]
-#[xml(rename = "svcs", ns(EPP_XMLNS))]
-pub struct Services<'a> {
-    /// The service URIs being used by this EPP session represented by `<objURI>` in EPP XML
-    #[xml(rename = "objURI")]
-    pub obj_uris: Vec<Cow<'a, str>>,
-    // The `<svcExtension>` being used in this EPP session
-    #[xml(rename = "svcExtension")]
-    pub svc_ext: Option<ServiceExtension<'a>>,
 }
