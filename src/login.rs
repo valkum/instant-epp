@@ -1,9 +1,9 @@
-use std::fmt::Debug;
+use std::{borrow::Cow, fmt::Debug};
 
 use instant_xml::ToXml;
 
 use crate::{
-    common::{NoExtension, Options, ServiceExtension, Services, EPP_XMLNS},
+    common::{NoExtension, ServiceExtension, EPP_XMLNS},
     contact, domain, host,
     request::{Command, Transaction, EPP_LANG, EPP_VERSION},
 };
@@ -69,6 +69,42 @@ impl<'a> Login<'a> {
     pub fn services(&mut self, services: Services<'a>) {
         self.services = services;
     }
+}
+
+/// The `<options>` type in EPP XML login requests
+///
+/// Implements the `epp:credsOptionsType` type defined in RFC 5730.
+#[derive(Debug, Eq, PartialEq, ToXml)]
+#[xml(rename = "options", ns(EPP_XMLNS))]
+pub struct Options<'a> {
+    /// The EPP version being used
+    pub version: Cow<'a, str>,
+    /// The language that will be used during EPP transactions
+    pub lang: Cow<'a, str>,
+}
+
+impl<'a> Options<'a> {
+    /// Creates a LoginOptions object with version and lang data
+    pub fn build(version: &'a str, lang: &'a str) -> Self {
+        Self {
+            version: version.into(),
+            lang: lang.into(),
+        }
+    }
+}
+
+/// The `<svcs>` type in EPP XML
+///
+/// Implements the `epp:loginSvcType` type defined in RFC 5730.
+#[derive(Debug, Eq, PartialEq, ToXml)]
+#[xml(rename = "svcs", ns(EPP_XMLNS))]
+pub struct Services<'a> {
+    /// The service URIs being used by this EPP session represented by `<objURI>` in EPP XML
+    #[xml(rename = "objURI")]
+    pub obj_uris: Vec<Cow<'a, str>>,
+    // The `<svcExtension>` being used in this EPP session
+    #[xml(rename = "svcExtension")]
+    pub svc_ext: Option<ServiceExtension<'a>>,
 }
 
 impl Command for Login<'_> {

@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use chrono::{DateTime, Utc};
 use instant_xml::{Deserializer, FromXml, ToXml};
 
-use crate::common::{Options, ServiceExtension, Services, EPP_XMLNS};
+use crate::common::{ServiceExtension, EPP_XMLNS};
 
 // Request
 
@@ -16,16 +16,29 @@ pub(crate) struct Hello;
 /// Type for data within the `<svcMenu>` section of an EPP greeting
 #[derive(Debug, Eq, PartialEq)]
 pub struct ServiceMenu {
-    pub options: Options<'static>,
-    pub services: Services<'static>,
+    pub version: String,
+    pub langs: Vec<String>,
+    pub services: Services,
+}
+
+/// Offered services by the remote EPP server, represented by the `<svcs>` tag in EPP greeting XML
+#[derive(Debug, Eq, PartialEq)]
+pub struct Services {
+    /// The service URIs being offered by the EPP server represented by `<objURI>` in EPP XML
+    pub obj_uris: Vec<String>,
+    /// The service extensions being offered by the EPP server represented by `<svcExtension>` in EPP XML
+    pub svc_ext: Option<ServiceExtension<'static>>,
 }
 
 /// Simplified service menu type for deserialization to `ServiceMenu` type from EPP greeting XML
+///
+/// Implements the `epp:svcMenuType` type defined in RFC 5730.
 #[derive(Debug, FromXml, PartialEq)]
 #[xml(ns(EPP_XMLNS), rename = "svcMenu")]
 struct FlattenedServiceMenu {
     version: String,
-    lang: String,
+    #[xml(rename = "lang")]
+    langs: Vec<String>,
     #[xml(rename = "objURI")]
     obj_uris: Vec<String>,
     #[xml(rename = "svcExtension")]
@@ -51,12 +64,10 @@ impl<'xml> FromXml<'xml> for ServiceMenu {
         };
 
         *into = Some(Self {
-            options: Options {
-                version: flattened.version.into(),
-                lang: flattened.lang.into(),
-            },
+            version: flattened.version,
+            langs: flattened.langs,
             services: Services {
-                obj_uris: flattened.obj_uris.into_iter().map(|s| s.into()).collect(),
+                obj_uris: flattened.obj_uris,
                 svc_ext: flattened.svc_ext,
             },
         });
@@ -338,8 +349,30 @@ mod tests {
             object.service_date,
             Utc.with_ymd_and_hms(2021, 7, 25, 14, 51, 17).unwrap()
         );
-        assert_eq!(object.svc_menu.options.version, "1.0");
-        assert_eq!(object.svc_menu.options.lang, "en");
+        assert_eq!(object.svc_menu.version, "1.0");
+        assert_eq!(object.svc_menu.langs.first().unwrap(), "en");
+        assert_eq!(object.svc_menu.services.obj_uris.len(), 4);
+        assert_eq!(object.svc_menu.services.svc_ext.unwrap().ext_uris.len(), 5);
+        assert_eq!(object.dcp.statement.len(), 2);
+        assert_eq!(
+            object.dcp.expiry.unwrap().inner,
+            ExpiryType::Relative(Relative("P1M".into()))
+        );
+    }
+
+    #[test]
+    fn greeting_multi_lang() {
+        let xml = get_xml("response/greeting_multi_lang.xml").unwrap();
+        let object = xml::deserialize::<Greeting>(xml.as_str()).unwrap();
+
+        assert_eq!(object.service_id, "ISPAPI EPP Server");
+        assert_eq!(
+            object.service_date,
+            Utc.with_ymd_and_hms(2021, 7, 25, 14, 51, 17).unwrap()
+        );
+        assert_eq!(object.svc_menu.version, "1.0");
+        assert_eq!(object.svc_menu.langs.first().unwrap(), "en");
+        assert_eq!(object.svc_menu.langs.get(1).unwrap(), "fr");
         assert_eq!(object.svc_menu.services.obj_uris.len(), 4);
         assert_eq!(object.svc_menu.services.svc_ext.unwrap().ext_uris.len(), 5);
         assert_eq!(object.dcp.statement.len(), 2);
