@@ -86,7 +86,7 @@ pub struct All;
 
 /// Type corresponding to `<none>` in the EPP greeting XML
 #[derive(Debug, Eq, FromXml, PartialEq)]
-#[xml(rename = "noAccess", ns(EPP_XMLNS))]
+#[xml(rename = "none", ns(EPP_XMLNS))]
 pub struct NoAccess;
 
 /// Type corresponding to `<null>` in the EPP greeting XML
@@ -376,6 +376,31 @@ mod tests {
         assert_eq!(object.svc_menu.services.obj_uris.len(), 4);
         assert_eq!(object.svc_menu.services.svc_ext.unwrap().ext_uris.len(), 5);
         assert_eq!(object.dcp.statement.len(), 2);
+        assert_eq!(
+            object.dcp.expiry.unwrap().inner,
+            ExpiryType::Relative(Relative("P1M".into()))
+        );
+    }
+
+    #[test]
+    fn greeting_no_access() {
+        let xml = get_xml("response/greeting_dcp_none.xml").unwrap();
+        let object = xml::deserialize::<Greeting>(xml.as_str()).unwrap();
+
+        assert_eq!(object.service_id, "ISPAPI EPP Server");
+        assert_eq!(
+            object.service_date,
+            Utc.with_ymd_and_hms(2021, 7, 25, 14, 51, 17).unwrap()
+        );
+        assert_eq!(object.svc_menu.options.version, "1.0");
+        assert_eq!(object.svc_menu.options.lang, "en");
+        assert_eq!(object.svc_menu.services.obj_uris.len(), 4);
+        assert_eq!(object.svc_menu.services.svc_ext.unwrap().ext_uris.len(), 5);
+        assert_eq!(object.dcp.statement.len(), 2);
+        assert!(matches!(
+            object.dcp.access.inner,
+            super::AccessType::NoAccess(_)
+        ));
         assert_eq!(
             object.dcp.expiry.unwrap().inner,
             ExpiryType::Relative(Relative("P1M".into()))
