@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use chrono::{DateTime, Utc};
 use instant_xml::{Deserializer, FromXml, ToXml};
 
-use crate::common::{Options, ServiceExtension, Services, EPP_XMLNS};
+use crate::common::{ServiceExtension, Services, EPP_XMLNS};
 
 // Request
 
@@ -16,7 +16,8 @@ pub(crate) struct Hello;
 /// Type for data within the `<svcMenu>` section of an EPP greeting
 #[derive(Debug, Eq, PartialEq)]
 pub struct ServiceMenu {
-    pub options: Options<'static>,
+    pub version: String,
+    pub lang: String,
     pub services: Services<'static>,
 }
 
@@ -51,10 +52,8 @@ impl<'xml> FromXml<'xml> for ServiceMenu {
         };
 
         *into = Some(Self {
-            options: Options {
-                version: flattened.version.into(),
-                lang: flattened.lang.into(),
-            },
+            version: flattened.version,
+            lang: flattened.lang,
             services: Services {
                 obj_uris: flattened.obj_uris.into_iter().map(|s| s.into()).collect(),
                 svc_ext: flattened.svc_ext,
@@ -338,8 +337,8 @@ mod tests {
             object.service_date,
             Utc.with_ymd_and_hms(2021, 7, 25, 14, 51, 17).unwrap()
         );
-        assert_eq!(object.svc_menu.options.version, "1.0");
-        assert_eq!(object.svc_menu.options.lang, "en");
+        assert_eq!(object.svc_menu.version, "1.0");
+        assert_eq!(object.svc_menu.lang, "en");
         assert_eq!(object.svc_menu.services.obj_uris.len(), 4);
         assert_eq!(object.svc_menu.services.svc_ext.unwrap().ext_uris.len(), 5);
         assert_eq!(object.dcp.statement.len(), 2);
@@ -359,8 +358,8 @@ mod tests {
             object.service_date,
             Utc.with_ymd_and_hms(2021, 7, 25, 14, 51, 17).unwrap()
         );
-        assert_eq!(object.svc_menu.options.version, "1.0");
-        assert_eq!(object.svc_menu.options.lang, "en");
+        assert_eq!(object.svc_menu.version, "1.0");
+        assert_eq!(object.svc_menu.lang, "en");
         assert_eq!(object.svc_menu.services.obj_uris.len(), 4);
         assert_eq!(object.svc_menu.services.svc_ext.unwrap().ext_uris.len(), 5);
         assert_eq!(object.dcp.statement.len(), 2);
