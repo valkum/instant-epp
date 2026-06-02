@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use chrono::{DateTime, Utc};
 use instant_xml::{Deserializer, FromXml, ToXml};
 
-use crate::common::{ServiceExtension, Services, EPP_XMLNS};
+use crate::common::{ServiceExtension, EPP_XMLNS};
 
 // Request
 
@@ -18,7 +18,16 @@ pub(crate) struct Hello;
 pub struct ServiceMenu {
     pub version: String,
     pub lang: String,
-    pub services: Services<'static>,
+    pub services: Services,
+}
+
+/// Offered services by the remote EPP server, represented by the `<svcs>` tag in EPP greeting XML
+#[derive(Debug, Eq, PartialEq)]
+pub struct Services {
+    /// The service URIs being offered by the EPP server represented by `<objURI>` in EPP XML
+    pub obj_uris: Vec<String>,
+    /// The service extensions being offered by the EPP server represented by `<svcExtension>` in EPP XML
+    pub svc_ext: Option<ServiceExtension<'static>>,
 }
 
 /// Simplified service menu type for deserialization to `ServiceMenu` type from EPP greeting XML
@@ -55,7 +64,7 @@ impl<'xml> FromXml<'xml> for ServiceMenu {
             version: flattened.version,
             lang: flattened.lang,
             services: Services {
-                obj_uris: flattened.obj_uris.into_iter().map(|s| s.into()).collect(),
+                obj_uris: flattened.obj_uris,
                 svc_ext: flattened.svc_ext,
             },
         });
