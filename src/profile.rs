@@ -236,7 +236,58 @@ impl<D, T: ExtTuple> Response<D, Exts<T>> {
     pub fn ext<X: 'static>(&self) -> Option<&X> {
         self.extension().and_then(|exts| exts.get::<X>())
     }
+
+    /// Extract several response extensions in one destructure, axum-extractor style.
+    ///
+    /// ```ignore
+    /// let (rgp, fee): (&RgpInfData, Option<&FeeData>) = rsp.extract()?;
+    /// ```
+    pub fn extract<'a, E: FromExts<'a>>(&'a self) -> Result<E, MissingExtension> {
+        E::from_exts(self.extension())
+    }
 }
+
+/// Error returned by [`Response::extract`] when a *required* extension (a bare
+/// `&X` in the extracted tuple) is not present in the response.
+#[derive(Debug)]
+pub struct MissingExtension(pub &'static str);
+
+/// Extract typed values from a response's `<extension>` set (axum-extractor style).
+///
+/// Implemented for `&X` (required), `Option<&X>` (optional), and tuples of those
+/// so several extensions can be pulled in a single [`Response::extract`].
+pub trait FromExts<'a>: Sized {
+    /// Pull `Self` out of the (possibly absent) extension set.
+    fn from_exts<T: ExtTuple>(exts: Option<&'a Exts<T>>) -> Result<Self, MissingExtension>;
+}
+
+impl<'a, X: 'static> FromExts<'a> for &'a X {
+    fn from_exts<T: ExtTuple>(exts: Option<&'a Exts<T>>) -> Result<Self, MissingExtension> {
+        exts.and_then(|e| e.get::<X>())
+            // Todo should we instead use the XML namespace here?
+            .ok_or(MissingExtension(std::any::type_name::<X>()))
+    }
+}
+
+impl<'a, X: 'static> FromExts<'a> for Option<&'a X> {
+    fn from_exts<T: ExtTuple>(exts: Option<&'a Exts<T>>) -> Result<Self, MissingExtension> {
+        Ok(exts.and_then(|e| e.get::<X>()))
+    }
+}
+
+macro_rules! impl_from_exts_tuple {
+    ($($G:ident),+) => {
+        impl<'a, $($G: FromExts<'a>),+> FromExts<'a> for ($($G,)+) {
+            fn from_exts<T: ExtTuple>(exts: Option<&'a Exts<T>>) -> Result<Self, MissingExtension> {
+                Ok(($($G::from_exts(exts)?,)+))
+            }
+        }
+    };
+}
+
+impl_from_exts_tuple!(A);
+impl_from_exts_tuple!(A, B);
+impl_from_exts_tuple!(A, B, C);
 
 #[cfg(test)]
 mod tests {
@@ -325,5 +376,27 @@ mod tests {
             rsp.ext::<RgpRequestUpdateResponse>().is_none(),
             "upData absent"
         );
+    }
+
+    #[test]
+    fn extract_required_and_optional() {
+        // axum-style: `&X` is required, `Option<&X>` is optional, pulled in one
+        // destructure with the types annotated at the call site.
+        type E = Exts<(
+            Option<RgpRequestInfoResponse>,
+            Option<RgpRequestUpdateResponse>,
+        )>;
+
+        let xml = get_xml("response/extensions/domain_info_rgp.xml").unwrap();
+        let rsp = xml::deserialize::<Response<InfoData, E>>(&xml).unwrap();
+
+        let (rgp, upd): (&RgpRequestInfoResponse, Option<&RgpRequestUpdateResponse>) =
+            rsp.extract().unwrap();
+        assert_eq!(rgp.rgp_status.len(), 2);
+        assert!(upd.is_none());
+
+        // A required extension the server did not return is an error, not a panic.
+        let err = rsp.extract::<&RgpRequestUpdateResponse>().unwrap_err();
+        assert!(err.0.contains("RgpRequestUpdateResponse"));
     }
 }
