@@ -298,13 +298,11 @@ async fn transact_profiled_info_response_only_extension() {
     assert_eq!(rsp.res_data().unwrap().name, "eppdev-1.com");
 
     // The response-only RGP extension is present, even though the request
-    // carried no extension at all.
-    let exts = rsp.extension().expect("extension present");
-    let rgp = exts
-        .0
-         .0
-        .as_ref()
-        .expect("rgp infData populated in the response-extension tuple");
+    // carried no extension at all. `ext::<X>()` flattens the `<extension>`
+    // presence check — no `unwrap` needed.
+    let rgp = rsp
+        .ext::<RgpRequestInfoResponse>()
+        .expect("rgp infData populated in the response");
     assert_eq!(
         rgp.rgp_status,
         vec![RgpStatus::AddPeriod, RgpStatus::RenewPeriod]

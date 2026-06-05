@@ -1,9 +1,12 @@
+use std::any::Any;
+
 use instant_xml::ser::Context;
 use instant_xml::{
     Accumulate, Deserializer, Error, FromXml, FromXmlOwned, Id, Kind, Serializer, ToXml,
 };
 
 use crate::common::EPP_XMLNS;
+use crate::response::Response;
 
 /// Maps a command and request-extension tuple, for a given registry profile, to
 /// the response and the tuple of response extensions it may carry here.
@@ -183,6 +186,58 @@ impl<'xml, A: FromXml<'xml>, B: FromXml<'xml>> Accumulate<Exts<(Option<A>, Optio
     }
 }
 
+impl<T: ExtTuple> Exts<T> {
+    /// Borrow the response extension of type `X`, if the server returned it.
+    ///
+    /// ```ignore
+    /// let rgp = rsp.extension().and_then(Exts::get::<RgpInfData>);
+    /// ```
+    pub fn get<X: 'static>(&self) -> Option<&X> {
+        self.0.find::<X>()
+    }
+}
+
+/// A tuple of optional response extensions supporting type-directed lookup.
+///
+/// Implemented for tuples up to arity 3. Used by [`Exts::get`]; callers do not
+/// interact with it directly.
+pub trait ExtTuple {
+    /// Borrow the contained extension of type `X`, if present.
+    fn find<X: 'static>(&self) -> Option<&X>;
+}
+
+impl ExtTuple for () {
+    fn find<X: 'static>(&self) -> Option<&X> {
+        None
+    }
+}
+
+macro_rules! impl_ext_tuple {
+    ($($T:ident . $idx:tt),+) => {
+        impl<$($T: 'static),+> ExtTuple for ($(Option<$T>,)+) {
+            fn find<X: 'static>(&self) -> Option<&X> {
+                $(
+                    if let Some(found) = self.$idx.as_ref().and_then(|v| (v as &dyn Any).downcast_ref::<X>()) {
+                        return Some(found);
+                    }
+                )+
+                None
+            }
+        }
+    };
+}
+
+impl_ext_tuple!(A.0);
+impl_ext_tuple!(A.0, B.1);
+impl_ext_tuple!(A.0, B.1, C.2);
+
+impl<D, T: ExtTuple> Response<D, Exts<T>> {
+    /// Borrow the response extension of type `X`, if the server returned it.
+    pub fn ext<X: 'static>(&self) -> Option<&X> {
+        self.extension().and_then(|exts| exts.get::<X>())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Exts, Profile, ProfiledCommand};
@@ -242,8 +297,9 @@ mod tests {
         let rsp = xml::deserialize::<Resp>(&xml).unwrap();
 
         assert_eq!(rsp.res_data().unwrap().name, "eppdev-1.com");
-        let exts = rsp.extension().unwrap();
-        let rgp = exts.0 .0.as_ref().expect("rgp infData present");
+        let rgp = rsp
+            .ext::<RgpRequestInfoResponse>()
+            .expect("rgp infData present");
         assert_eq!(rgp.rgp_status.len(), 2);
         assert_eq!(rgp.rgp_status[0], RgpStatus::AddPeriod);
         assert_eq!(rgp.rgp_status[1], RgpStatus::RenewPeriod);
@@ -261,8 +317,13 @@ mod tests {
         let xml = get_xml("response/extensions/domain_info_rgp.xml").unwrap();
         let rsp = xml::deserialize::<Response<InfoData, E>>(&xml).unwrap();
 
-        let exts = rsp.extension().unwrap();
-        assert!(exts.0 .0.is_some(), "infData slot populated");
-        assert!(exts.0 .1.is_none(), "upData slot absent");
+        assert!(
+            rsp.ext::<RgpRequestInfoResponse>().is_some(),
+            "infData present"
+        );
+        assert!(
+            rsp.ext::<RgpRequestUpdateResponse>().is_none(),
+            "upData absent"
+        );
     }
 }
